@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """
 Usage:
-  cif2qewan.py <cif_file> <toml_file> [--so] [--mag]
+    cif2qewan.py <cif_file> <toml_file> [--so] [--mag]
 
 Options:
-  --so     input including spin-orbit couplings
-  --mag    ferromagnetic calculations
+    --so     input including spin-orbit couplings
+    --mag    ferromagnetic calculations
 """
 
 from docopt import docopt
@@ -13,6 +13,7 @@ import sys
 import os
 import re
 import itertools
+import warnings
 import numpy as np
 import pandas as pd
 from pymatgen.core.periodic_table import Element
@@ -21,11 +22,11 @@ import toml
 class qe_wannier_in:
     def __init__(self, cif_file, toml_file, so, mag):
         info = toml.load(toml_file)
-        self.cif2cell_path=info["cif2cell_path"]
+        self.cif2cell_path = info["cif2cell_path"]
         self.scf_k_resolution = info["scf_k_resolution"]
         self.degauss = info["degauss"]
         self.pseudo_dir = info["pseudo_dir"]
-        self.pp_file_name = info["pp_file_name"]
+        self.pp_list_path = info["pp_list_path"]
         self.info_pw2wan = info["pw2wan"]
 
         self.so = so
@@ -38,8 +39,8 @@ class qe_wannier_in:
         self.electrons_str = "&electrons\n"
 
         ntyp, nat = self.read_set_system()
-        ecut_rho, ecut_wfc = self.read_set_pseudo_other(ntyp, nat, self.pp_file_name)
-        self.set_system2(ntyp, ecut_rho, ecut_wfc)
+        ecut_wfc, ecut_rho = self.read_set_pseudo_other(ntyp, nat)
+        self.set_system2(ntyp, ecut_wfc, ecut_rho)
         self.set_control()
         self.set_electrons(conv_thr="1.0d-8")
 
@@ -70,7 +71,7 @@ class qe_wannier_in:
                 nat = int(line.split("=")[1])
         return ntyp, nat
 
-    def set_system2(self, ntyp, ecut_rho, ecut_wfc):
+    def set_system2(self, ntyp, ecut_wfc, ecut_rho):
         self.system_str += "  ecutwfc = {}\n".format(ecut_wfc)
         self.system_str += "  ecutrho = {}\n".format(ecut_rho)
         self.system_str += "  occupations = 'smearing'\n"
@@ -101,9 +102,9 @@ class qe_wannier_in:
         self.electrons_str += "  conv_thr = {}\n".format(conv_thr)
 
     def read_set_pseudo_other(self, ntyp, nat):
-        ecut_rho = 0
         ecut_wfc = 0
-        pslist = pseudo_list(self.pseudo_dir, self.pp_file_name)
+        ecut_rho = 0
+        pslist = pseudo_list(self.pseudo_dir, self.pp_list_path)
         self.pseudo_str = "ATOMIC_SPECIES\n"
         self.projection_str = ""
         num_wann_dict = {}
@@ -135,16 +136,19 @@ class qe_wannier_in:
                     line = self.lines[i+j+1]
                     atm = line[:5].strip()
                     ps = pslist.pseudo(atm)
-                    ecut_rho = max(ecut_rho, ps.ecut_rho)
-                    ecut_wfc = max(ecut_wfc, ps.ecut_wfc)
-                    self.pseudo_str += re.sub("[A-Za-z]+_PSEUDO", ps.pseudo_file(), line)
+                    ecut_wfc = max(ecut_wfc, ps[4])
+                    ecut_rho = max(ecut_rho, ps[5])
+                    if ecut_rho < 4*ecut_wfc:
+                        warnings.warn("ecut_rho should be bigger than 4*ecut_wfc, but {} < {}.".format(ecut_rho, 4*ecut_wfc))
+                    self.pseudo_str += re.sub("[A-Za-z]+_PSEUDO", ps[0], line)
                     if(self.so and not self.mag):
                         self.pseudo_str = self.pseudo_str.replace(".pbe", ".rel-pbe")
-                    if(ps.wannier_orb != ""):
-                        self.projection_str += "{}:{}\n".format(atm, ",".join(list(ps.wannier_orb)))
-                    num_wann_dict[atm] = ps.num_wann
-                    nexclude_dict[atm] = ps.nexclude
-        return ecut_rho, ecut_wfc
+                        self.pseudo_str = self.pseudo_str.replace("_sr", "_fr")
+                    if(ps[2] != ""):
+                        self.projection_str += "{}:{}\n".format(atm, ",".join(list(ps[2])))
+                    num_wann_dict[atm] = ps[3]
+                    nexclude_dict[atm] = ps[1]
+        return ecut_wfc, ecut_rho
 
     def convert2nscf(self):
         self.control_str = self.control_str.replace("'scf'", "'nscf'")
@@ -169,6 +173,7 @@ class qe_wannier_in:
 
             if(self.so):
                 self.pseudo_str = self.pseudo_str.replace('.pbe', '.rel-pbe')
+                self.pseudo_str = self.pseudo_str.replace("_sr", "_fr")
 
         self.electrons_str = re.sub("  conv_thr.*\n", "  conv_thr = 1.d-10\n", self.electrons_str)
         #self.electrons_str += "  diago_full_acc = .true.\n"
@@ -344,75 +349,39 @@ class qe_wannier_in:
             fp.write("/\n")
 
 
-class pseudo_wannier:
-    """
-    pseudopotential including information for wannier
-    """
-    def __init__(self, pseudo_dir, atm, type, nexclude, wannier_orb):
-        self.atm = atm
-        self.type = type
-        self.nexclude = nexclude
-        self.wannier_orb = wannier_orb
-        self._ecut_wfc = 0
-        self._ecut_rho = 0
-        self.pseudo_dir = pseudo_dir
-        self.pseudo_file = "{}.{}.UPF".format(self.atm, self.type)
-
-        self.num_wann = 0
-        for s in wannier_orb:
-            if(s == "s"): self.num_wann += 1
-            if(s == "p"): self.num_wann += 3
-            if(s == "d"): self.num_wann += 5
-            if(s == "f"): self.num_wann += 7
-
-    def set_ecut(self):
-        if(self._ecut_rho == 0 or self._ecut_wfc == 0):
-            with open(self.pseudo_dir + "/" + self.pseudo_file(), "r") as fp:
-                lines = fp.readlines()
-            for line in lines:
-                if("Suggested minimum cutoff for wavefunctions" in line):
-                    self._ecut_wfc = float(line.split()[5])
-                if("Suggested minimum cutoff for charge density" in line):
-                    self._ecut_rho = float(line.split()[6])
-                    break
-
-    @property
-    def ecut_wfc(self):
-        self.set_ecut()
-        return self._ecut_wfc
-
-    @property
-    def ecut_rho(self):
-        self.set_ecut()
-        return self._ecut_rho
-
-
 class pseudo_list:
-    def __init__(self, pseudo_dir, pp_file_name):
-        self.ps_list = {}
-        pp_info = self.read_pp_info(pp_file_name)
-        for key, values in pp_info.items():
-            if values is not None:
-                self.ps_list[key] = pseudo_wannier(pseudo_dir, key, values[0], values[1], values[2])
-            else:
-                self.ps_list[key] = None
+    def __init__(self, pseudo_dir, pp_list_path):
+        self.pseudo_dir = pseudo_dir
+        self.pp_info = self.read_pp_info(pp_list_path)
 
     def pseudo(self, atm):
-        return self.ps_list[atm]
+        return self.pp_info[atm]
 
-    def read_pp_info(self, pp_file_name):
-        csv_input = pd.read_csv(pp_file_name, sep=",")
+    def read_pp_info(self, pp_list_path):
+        csv_input = pd.read_csv(pp_list_path, sep=",").fillna("NaN")
         #print(csv_input)
         pp_dict = {}
         for value in csv_input.values:
-            if value[1] is np.nan:
+            if value[1] == "NaN":    # PP file name
                 pp_dict[value[0]] = None
             else:
-                if value[2] is np.nan:
+                if value[2] == "NaN":  # nexclude
                     value[2] = 0
-                elif value[3] is np.nan:
+                if value[3] == "NaN":  # orbital
                     value[3] = ""
-                pp_dict[value[0]]=(value[1], int(value[2]), value[3])
+                if value[4] == "NaN":  # ecutwfc
+                    value[4] = 0
+                if value[5] == "NaN":  # ecutrho
+                    value[5] = 0
+
+                pp_file_name = "{}.UPF".format(value[1])
+                num_wann = 0
+                for s in value[3]:
+                    if(s == "s"): num_wann += 1
+                    if(s == "p"): num_wann += 3
+                    if(s == "d"): num_wann += 5
+                    if(s == "f"): num_wann += 7
+                pp_dict[value[0]] = (pp_file_name, int(value[2]), value[3], num_wann, float(value[4]), float(value[5]))
         return pp_dict
 
 
