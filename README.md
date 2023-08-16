@@ -36,7 +36,6 @@ cif2qewan.py is a simple python script to create quantum-ESPRESSO and wannier90 
      % wannier90.x pwscf
      ```
 
-
 ## Compare band structures of DFT and wannier90 #####
 cif2qewan.py prepares band calculation input files in directory "band".
 
