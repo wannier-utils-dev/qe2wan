@@ -3,5 +3,5 @@
 This example is created with the following command.
 
 ```sh
-% python cif2qewan.py cif2qewan.toml --so --mag
+% python cif2qewan.py mp-13_Fe.cif cif2qewan.toml --so --mag
 ```
