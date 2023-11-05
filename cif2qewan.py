@@ -277,6 +277,8 @@ class qe_wannier_in:
             fp.write(" prefix = 'pwscf'\n")
             fp.write(" seedname = 'pwscf'\n")
             fp.write(" spin_component = 'none'\n")
+            if "wannier_plot_supercell" in info.keys():
+              fp.write(f" wannier_plot_supercell = {info['wannier_plot_supercell']}\n")
             fp.write(" write_mmn = .true.\n")
             fp.write(" write_amn = .true.\n")
             fp.write(" write_unk = {}\n".format(info["write_unk"]))
