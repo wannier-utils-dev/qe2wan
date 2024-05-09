@@ -12,7 +12,7 @@
 /
 &system
   nosym = .true.
-  nbnd = 56
+  nbnd = 62
   ibrav = 0
   A =    2.86304
   nat = 1

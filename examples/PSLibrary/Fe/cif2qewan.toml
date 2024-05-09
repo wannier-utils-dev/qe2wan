@@ -1,6 +1,6 @@
 cif2cell_path = "/home/arimoto/ISSP/.venv/bin/cif2cell"
 pseudo_dir = "/home/arimoto/PseudoPotentials/PSLibrary"
-pp_list_path = "/home/arimoto/ISSP/Norm_Conserved_PseudoPotentials/cif2qewan/pp_psl_rrkj_ecuts.csv"
+pp_list_path = "/home/arimoto/ISSP/Norm_Conserved_PseudoPotentials/cif2qewan/pp_psl_rrkj.csv"
 scf_k_resolution = 0.15
 degauss = 0.01
 
