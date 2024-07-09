@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """
 Usage:
-  cif2qewan.py <cif_file> <toml_file> [--so] [--mag]
+    cif2qewan.py <cif_file> <toml_file> [--so] [--mag]
 
 Options:
-  --so     input including spin-orbit couplings
-  --mag    ferromagnetic calculations
+    --so     input including spin-orbit couplings
+    --mag    ferromagnetic calculations
 """
 
 from docopt import docopt
@@ -13,18 +13,20 @@ import sys
 import os
 import re
 import itertools
+import warnings
 import numpy as np
+import pandas as pd
+from pymatgen.core.periodic_table import Element
 import toml
 
 class qe_wannier_in:
     def __init__(self, cif_file, toml_file, so, mag):
-
         info = toml.load(toml_file)
-        self.cif2cell_path=info["cif2cell_path"]
+        self.cif2cell_path = info["cif2cell_path"]
         self.scf_k_resolution = info["scf_k_resolution"]
         self.degauss = info["degauss"]
         self.pseudo_dir = info["pseudo_dir"]
-        self.pp_file_name = info["pp_file_name"]
+        self.pp_list_path = info["pp_list_path"]
         self.info_pw2wan = info["pw2wan"]
 
         self.so = so
@@ -37,12 +39,9 @@ class qe_wannier_in:
         self.electrons_str = "&electrons\n"
 
         ntyp, nat = self.read_set_system()
-        ecut_rho, ecut_wfc = self.read_set_pseudo_other(ntyp, nat, self.pp_file_name)
-
-        self.set_system2(ntyp, ecut_rho, ecut_wfc)
-
+        ecut_wfc, ecut_rho = self.read_set_pseudo_other(ntyp, nat)
+        self.set_system2(ntyp, ecut_wfc, ecut_rho)
         self.set_control()
-
         self.set_electrons(conv_thr="1.0d-8")
 
 
@@ -72,7 +71,7 @@ class qe_wannier_in:
                 nat = int(line.split("=")[1])
         return ntyp, nat
 
-    def set_system2(self, ntyp, ecut_rho, ecut_wfc):
+    def set_system2(self, ntyp, ecut_wfc, ecut_rho):
         self.system_str += "  ecutwfc = {}\n".format(ecut_wfc)
         self.system_str += "  ecutrho = {}\n".format(ecut_rho)
         self.system_str += "  occupations = 'smearing'\n"
@@ -102,14 +101,14 @@ class qe_wannier_in:
         self.electrons_str += "  mixing_beta = 0.1\n"
         self.electrons_str += "  conv_thr = {}\n".format(conv_thr)
 
-    def read_set_pseudo_other(self, ntyp, nat, pp_file_name):
-        ecut_rho = 0
+    def read_set_pseudo_other(self, ntyp, nat):
         ecut_wfc = 0
-        pslist = pseudo_list(self.pseudo_dir, self.pp_file_name)
+        ecut_rho = 0
+        pslist = pseudo_list(self.pseudo_dir, self.pp_list_path)
         self.pseudo_str = "ATOMIC_SPECIES\n"
         self.projection_str = ""
-        num_wann_list = {}
-        nexclude_list = {}
+        num_wann_dict = {}
+        nexclude_dict = {}
         self.atom_list = []
         self.atom_pos_list = []
         self.num_wann = 0
@@ -127,8 +126,8 @@ class qe_wannier_in:
                     atm = self.lines[i+j+1].split()[0]
                     self.atom_list.append(atm)
                     self.atom_pos_list.append([float(x) for x in (self.lines[i+j+1].split()[1:4])])
-                    self.num_wann += num_wann_list[atm]
-                    self.nexclude += nexclude_list[atm]
+                    self.num_wann += num_wann_dict[atm]
+                    self.nexclude += nexclude_dict[atm]
             if ("K_POINTS" in line): 
                 self.kpoints_str = "".join(self.lines[i:i+2])
                 self.kmesh = [ int(x) for x in self.lines[i+1].split()[0:3] ]
@@ -137,16 +136,19 @@ class qe_wannier_in:
                     line = self.lines[i+j+1]
                     atm = line[:5].strip()
                     ps = pslist.pseudo(atm)
-                    ecut_rho = max(ecut_rho, ps.ecut_rho())
-                    ecut_wfc = max(ecut_wfc, ps.ecut_wfc())
-                    self.pseudo_str += re.sub('[A-Za-z]+_PSEUDO', ps.pseudo_file(), line)
+                    ecut_wfc = max(ecut_wfc, ps[4])
+                    ecut_rho = max(ecut_rho, ps[5])
+                    if ecut_rho < 4*ecut_wfc:
+                        warnings.warn("ecut_rho should be bigger than 4*ecut_wfc, but {} < {}.".format(ecut_rho, 4*ecut_wfc))
+                    self.pseudo_str += re.sub("[A-Za-z]+_PSEUDO", ps[0], line)
                     if(self.so and not self.mag):
-                        self.pseudo_str = self.pseudo_str.replace('.pbe', '.rel-pbe')
-                    if(ps.wannier_orb != ""):
-                        self.projection_str += "{}:{}\n".format(atm, ",".join(list(ps.wannier_orb)))
-                    num_wann_list[atm] = ps.num_wann
-                    nexclude_list[atm] = ps.nexclude
-        return ecut_rho, ecut_wfc
+                        self.pseudo_str = self.pseudo_str.replace(".pbe", ".rel-pbe")
+                        self.pseudo_str = self.pseudo_str.replace("_sr", "_fr")
+                    if(ps[2] != ""):
+                        self.projection_str += "{}:{}\n".format(atm, ",".join(list(ps[2])))
+                    num_wann_dict[atm] = ps[3]
+                    nexclude_dict[atm] = ps[1]
+        return ecut_wfc, ecut_rho
 
     def convert2nscf(self):
         self.control_str = self.control_str.replace("'scf'", "'nscf'")
@@ -171,6 +173,7 @@ class qe_wannier_in:
 
             if(self.so):
                 self.pseudo_str = self.pseudo_str.replace('.pbe', '.rel-pbe')
+                self.pseudo_str = self.pseudo_str.replace("_sr", "_fr")
 
         self.electrons_str = re.sub("  conv_thr.*\n", "  conv_thr = 1.d-10\n", self.electrons_str)
         #self.electrons_str += "  diago_full_acc = .true.\n"
@@ -179,10 +182,9 @@ class qe_wannier_in:
         self.kpoints_str = "K_POINTS {crystal}\n"
         self.kpoints_str += "{}\n".format(np.prod( self.nscfk ))
         self.wan_kmesh = ""
-        for kx, ky, kz in itertools.product( range(self.nscfk[0]), range(self.nscfk[1]), range(self.nscfk[2]) ):
-            kstr = "{:15.10f} {:15.10f} {:15.10f} {:15.10f}\n".format( float(kx)/self.nscfk[0], float(ky)/self.nscfk[1], float(kz)/self.nscfk[2], 1.0/np.prod(self.nscfk) )
-            self.kpoints_str += kstr
-            self.wan_kmesh += kstr
+        for kx, ky, kz in itertools.product(range(self.nscfk[0]), range(self.nscfk[1]), range(self.nscfk[2])):
+            self.kpoints_str += "{:15.10f} {:15.10f} {:15.10f} {:15.10f}\n".format(kx/self.nscfk[0], ky/self.nscfk[1], kz/self.nscfk[2], 1.0/np.prod(self.nscfk))
+            self.wan_kmesh += "{:15.10f} {:15.10f} {:15.10f}\n".format(kx/self.nscfk[0], ky/self.nscfk[1], kz/self.nscfk[2])
 
     def shift_k_nscf(self):
         """
@@ -220,18 +222,16 @@ class qe_wannier_in:
 
         except ImportError:
             print("Failed to import seek path. Simple kpath is used instead.")
-            self.tick_labels = ['R', 'G', 'X', 'M', 'G']
+            self.tick_labels = ["R", "G", "X", "M", "G"]
             self.tick_locs = [[0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.5, 0.5, 0.0], [0.0, 0.0, 0.0]]
             return
 
-        import pymatgen as mg
-
         cell = np.array([self.a1, self.a2, self.a3])
         pos = self.atom_pos_list
-        z = [mg.Element(s).Z for s in self.atom_list]
+        z = [Element(s).Z for s in self.atom_list]
         kpath = seekpath.getpaths.get_explicit_k_path([cell, pos, z])
 
-        new_b = kpath['reciprocal_primitive_lattice']
+        new_b = kpath["reciprocal_primitive_lattice"]
         m = np.matmul(new_b,cell.T) / (2 * np.pi)
         self.kpoints_rel = [ np.matmul(k, m) for k in kpath["explicit_kpoints_rel"] ]
 
@@ -253,6 +253,7 @@ class qe_wannier_in:
 
     def write_pwscf_in(self, pwscf_in):
         with open(pwscf_in, "w") as fp:
+            fp.write("! generated by {}\n".format(__file__.split("/")[-1]))
             fp.write(self.control_str + "/\n")
             fp.write(self.system_str + "/\n")
             fp.write(self.electrons_str + "/\n")
@@ -263,15 +264,17 @@ class qe_wannier_in:
 
     def write_band_in(self, band_in):
         with open(band_in, "w") as fp:
+            fp.write("! generated by {}\n".format(__file__.split("/")[-1]))
             fp.write("&bands\n")
             fp.write(" prefix = 'pwscf'\n")
             fp.write(" outdir = './work/'\n")
             fp.write(" filband = 'bands.out'\n")
             fp.write("/\n")
-        
+
     def write_pw2wan(self, pw2wan):
         info = self.info_pw2wan
         with open(pw2wan, "w") as fp:
+            fp.write("! generated by {}\n".format(__file__.split("/")[-1]))
             fp.write("&inputpp\n")
             fp.write(" outdir = './work'\n")
             fp.write(" prefix = 'pwscf'\n")
@@ -296,8 +299,6 @@ class qe_wannier_in:
             fp.write("num_iter = 0\n\n")
             fp.write("dis_froz_max = -200\n")
             fp.write("dis_froz_min = -200\n\n")
-
-
             if(self.so or self.mag):
                 fp.write("spinors = .true.\n\n")
 
@@ -329,14 +330,15 @@ class qe_wannier_in:
             fp.write(self.wan_kmesh)
             fp.write("end kpoints\n\n")
 
-            fp.write("Begin Kpoint_Path\n")
+            fp.write("begin kpoint_path\n")
             for i in range(len(self.tick_labels) - 1):
                 if(self.tick_labels[i] != "" and self.tick_labels[i+1] != ""):
                     fp.write("{0} {1[0]:14.10f} {1[1]:14.10f} {1[2]:14.10f}  {2} {3[0]:14.10f} {3[1]:14.10f} {3[2]:14.10f}\n".format(self.tick_labels[i], self.tick_locs[i], self.tick_labels[i+1], self.tick_locs[i+1]))
-            fp.write("End Kpoint_Path\n")
+            fp.write("end kpoint_path\n")
 
     def write_proj(self, proj_in):
         with open(proj_in, "w") as fp:
+            fp.write("! generated by {}\n".format(__file__.split("/")[-1]))
             fp.write("&projwfc\n")
             fp.write(" prefix = 'pwscf'\n")
             fp.write(" outdir = './work'\n")
@@ -347,96 +349,55 @@ class qe_wannier_in:
             fp.write("/\n")
 
 
-class pseudo_wannier:
-    """
-    pseudo potential including information for wannier
-    """
-    def __init__(self, pseudo_dir, atm, type, nexclude, wannier_orb):
-        self.atm = atm
-        self.type = type
-        self.nexclude = nexclude
-        self.wannier_orb = wannier_orb
-        self._ecut_wfc = 0
-        self._ecut_rho = 0
-        self.pseudo_dir = pseudo_dir
-
-        self.num_wann = 0
-        for s in wannier_orb:
-            if(s == "s"): self.num_wann += 1
-            if(s == "p"): self.num_wann += 3
-            if(s == "d"): self.num_wann += 5
-            if(s == "f"): self.num_wann += 7
-
-    def set_ecut(self):
-        if(self._ecut_rho == 0 or self._ecut_wfc == 0):
-            with open(self.pseudo_dir + "/" + self.pseudo_file(), "r") as fp:
-                for line in fp.readlines():
-                    if("Suggested minimum cutoff for wavefunctions" in line):
-                        self._ecut_wfc = float(line.split()[5])
-                    if("Suggested minimum cutoff for charge density" in line):
-                        self._ecut_rho = float(line.split()[6])
-                        break
-
-    def ecut_wfc(self):
-        self.set_ecut()
-        return self._ecut_wfc
-
-    def ecut_rho(self):
-        self.set_ecut()
-        return self._ecut_rho
-
-    def pseudo_file(self):
-        return "{}.{}.UPF".format(self.atm, self.type)
-
 class pseudo_list:
-    def __init__(self, pseudo_dir, pp_file_name):
-        self.ps_list = {}
-        pp_info = self.read_pp_info(pp_file_name)
-        for key, values in pp_info.items():
-            if values is not None:
-                self.ps_list[key] = pseudo_wannier(pseudo_dir, key, values[0], values[1], values[2])
-            else:
-                self.ps_list[key] = None
+    def __init__(self, pseudo_dir, pp_list_path):
+        self.pseudo_dir = pseudo_dir
+        self.pp_info = self.read_pp_info(pp_list_path)
 
     def pseudo(self, atm):
-        return self.ps_list[atm]
+        return self.pp_info[atm]
 
-    def read_pp_info(self, pp_file_name):
-        import pandas as pd          
-        csv_input = pd.read_csv(pp_file_name, sep=",")
+    def read_pp_info(self, pp_list_path):
+        csv_input = pd.read_csv(pp_list_path, sep=",").fillna("NaN")
         #print(csv_input)
-        dict_pp = {}
+        pp_dict = {}
         for value in csv_input.values:
-            if value[1] is np.nan:
-                dict_pp[value[0]] = None
+            if value[1] == "NaN":    # PP file name
+                pp_dict[value[0]] = None
             else:
-                if value[2] is np.nan:
+                if value[2] == "NaN":  # nexclude
                     value[2] = 0
-                elif value[3] is np.nan:
+                if value[3] == "NaN":  # orbital
                     value[3] = ""
-                dict_pp[value[0]]=(value[1], int(value[2]), value[3])
-        return dict_pp
+                if value[4] == "NaN":  # ecutwfc
+                    value[4] = 0
+                if value[5] == "NaN":  # ecutrho
+                    value[5] = 0
 
-if __name__ == '__main__':
+                pp_file_name = "{}.UPF".format(value[1])
+                num_wann = 0
+                for s in value[3]:
+                    if(s == "s"): num_wann += 1
+                    if(s == "p"): num_wann += 3
+                    if(s == "d"): num_wann += 5
+                    if(s == "f"): num_wann += 7
+                pp_dict[value[0]] = (pp_file_name, int(value[2]), value[3], num_wann, float(value[4]), float(value[5]))
+        return pp_dict
+
+
+if __name__ == "__main__":
     args = docopt(__doc__)
 
     cif_file = args["<cif_file>"]
     toml_file = args["<toml_file>"]
 
     qe_wan = qe_wannier_in(cif_file, toml_file, args["--so"], args["--mag"])
-
     qe_wan.write_pwscf_in("scf.in")
-
     qe_wan.convert2nscf()
-
     qe_wan.write_pwscf_in("nscf.in")
-
     qe_wan.calc_bands_seekpath()
-
     qe_wan.write_pw2wan("pw2wan.in")
-
     qe_wan.write_wannier("pwscf.win")
-
     qe_wan.write_proj("proj.in")
 
     if not os.path.exists("check_wannier"): os.mkdir("check_wannier")

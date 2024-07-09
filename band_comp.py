@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 # coding : utf-8
 # You can compare Wannier bands with PWSCF bands.
 # Please use the same k-path and structure for calculation.
@@ -5,20 +7,12 @@
 import numpy as np
 import os.path
 import matplotlib
-matplotlib.use('Agg')
-
+matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
-scfout = "scf.out"
-wannier_band = "pwscf_band.dat"
-wannier_band_gnu = "pwscf_band.gnu"
-pwscf_band = "./band/bands.out.gnu"
-pwscf_win = "pwscf.win"
-
-
-def get_ef_from_scfout():
+def get_ef_from_scfout(scfout):
     """
-    Get Fermi Energy from QE scf.out.
+    Get Fermi energy from QE scf.out.
     :param path_scf_out:
     :return: float(ef)
     """
@@ -35,11 +29,10 @@ def get_ef_from_scfout():
 
 def get_band_data(band_file):
     """
-    Get Band from qe(band.gnu)
-    x(k-path) is  normalized.
+    Get band from QE band.gnu.
+    x(k-path) is normalized.
     :return: x[nk], y[nk, nband]
     """
-
     data = np.loadtxt(band_file)
     x = data[:, 0]
     nband = np.sum(x == 0)
@@ -50,7 +43,7 @@ def get_band_data(band_file):
     return x, y
 
 
-def get_froz_max():
+def get_froz_max(pwscf_win):
     dis_froz_max = -200.0
     with open(pwscf_win) as fp:
         for line in fp.readlines():
@@ -60,7 +53,7 @@ def get_froz_max():
     return dis_froz_max
 
 
-def get_klabel():
+def get_klabel(wannier_band_gnu):
     """
     Get xtics from wannier_band.gnu
     :return: x(kpath)[num_klabel], label[num_klabel]
@@ -86,14 +79,17 @@ def get_klabel():
 
 
 def main():
+    scfout = "scf.out"
+    wannier_band = "pwscf_band.dat"
+    wannier_band_gnu = "pwscf_band.gnu"
+    pwscf_band = "./band/bands.out.gnu"
+
+
     x, y = get_band_data(wannier_band)
     x_qe, y_qe = get_band_data(pwscf_band)
 
-    ef = get_ef_from_scfout()
-
-    froz_max = get_froz_max()
-
-    klabel = get_klabel()
+    ef = get_ef_from_scfout(scfout)
+    klabel = get_klabel(wannier_band_gnu)
 
     # plot with matplotlib.pyplot
     plt.rcParams["font.size"] = 16
@@ -108,8 +104,8 @@ def main():
     y_max = np.max(y-ef)
     plt.ylim([y_min - 0.05*(y_max-y_min), y_max + 0.05*(y_max-y_min)])
 
-    plt.savefig("./band/band_compare.png", bbox_inches='tight')
-    plt.savefig("./band/band_compare.eps", bbox_inches='tight')
+    plt.savefig("./band/band_compare.png", bbox_inches="tight")
+    plt.savefig("./band/band_compare.eps", bbox_inches="tight")
 
 
 if __name__ == "__main__":
