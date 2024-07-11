@@ -218,11 +218,14 @@ class qe_wannier_in:
     def calc_bands_seekpath(self):
         try:
             import seekpath
+            if seekpath.__version__ < '2.1.0':
+                raise ImportError
 
         except ImportError:
-            print("Failed to import seek path. Simple kpath is used instead.")
+            print("Failed to import seekpath (>= 2.1.0). Simple kpath is used instead.")
             self.tick_labels = ["R", "G", "X", "M", "G"]
             self.tick_locs = [[0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.5, 0.5, 0.0], [0.0, 0.0, 0.0]]
+            self.band_nks = np.full(len(self.tick_labels), 20)
             return
 
         cell = np.array([self.a1, self.a2, self.a3])
